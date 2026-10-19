@@ -468,6 +468,35 @@
         </button>
     </nav>
 
+    <!-- TOAST: FEEDBACK DE SUCESSO -->
+    <div id="success-toast" class="fixed top-5 left-1/2 -translate-x-1/2 z-[60] hidden">
+        <div class="bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center space-x-2 font-bold text-sm">
+            <span>✅</span><span id="toast-msg">Treino salvo no histórico!</span>
+        </div>
+    </div>
+
+    <!-- MODAL: LEMBRETE DE TREINO PENDENTE -->
+    <div id="pending-workout-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-brandCard rounded-2xl border border-brandBorder max-w-sm w-full p-5 space-y-4 shadow-xl">
+            <div class="text-center space-y-2 pb-2 border-b border-brandBorder">
+                <div class="text-4xl">⏰</div>
+                <h3 class="text-lg font-black text-brandDark">Treino não registrado!</h3>
+                <p class="text-sm text-brandMuted font-medium">
+                    Você fez exercícios em <span id="pending-day-name" class="font-black text-emerald-600"></span> mas não registrou a conclusão.
+                </p>
+                <p class="text-xs text-brandMuted">Deseja registrar agora para manter seu histórico?</p>
+            </div>
+            <div class="flex flex-col space-y-2">
+                <button onclick="openFinishModalFromPending()" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm transition-all">
+                    ✅ Sim, registrar treino anterior
+                </button>
+                <button onclick="dismissPendingModal()" class="w-full py-2.5 border border-brandBorder text-brandMuted font-bold rounded-xl text-sm hover:bg-slate-50 transition-all">
+                    Ignorar e continuar
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- MODAL: FINALIZAR TREINO DO DIA -->
     <div id="finish-workout-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
         <div class="bg-brandCard rounded-2xl border border-brandBorder max-w-md w-full p-5 sm:p-6 space-y-4 shadow-xl">
@@ -739,6 +768,100 @@
         let workoutHistory = JSON.parse(localStorage.getItem('workoutHistoryLog') || '[]');
         let currentTheme = localStorage.getItem('appTheme') || 'light';
 
+        // Mapeamento dia da semana → dayKey do app
+        const weekDayMap = { 1: 'segunda', 3: 'quarta', 5: 'sexta', 6: 'sabado' };
+
+        // Retorna a data no formato DD/MM/AAAA
+        function todayStr() {
+            return new Date().toLocaleDateString('pt-BR');
+        }
+
+        // Retorna o dayKey correspondente ao dia de hoje (ou null se não for dia de treino)
+        function todayDayKey() {
+            return weekDayMap[new Date().getDay()] || null;
+        }
+
+        // Retorna o dayKey e a data do último dia de treino antes de hoje
+        function lastTrainingDay() {
+            const today = new Date();
+            for (let i = 1; i <= 7; i++) {
+                const d = new Date(today);
+                d.setDate(today.getDate() - i);
+                const key = weekDayMap[d.getDay()];
+                if (key) {
+                    return { key, dateStr: d.toLocaleDateString('pt-BR') };
+                }
+            }
+            return null;
+        }
+
+        // Verifica se a semana virou (segunda-feira) e limpa os checkboxes
+        function checkWeeklyReset() {
+            const lastReset = localStorage.getItem('lastWeeklyReset');
+            const now = new Date();
+            // Calcula a última segunda-feira
+            const dayOfWeek = now.getDay(); // 0=dom, 1=seg...
+            const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+            const lastMonday = new Date(now);
+            lastMonday.setDate(now.getDate() - daysSinceMonday);
+            lastMonday.setHours(0, 0, 0, 0);
+            const lastMondayStr = lastMonday.toISOString().split('T')[0];
+
+            if (lastReset !== lastMondayStr) {
+                completedCheckboxes = {};
+                localStorage.setItem('completedCheckboxes', JSON.stringify(completedCheckboxes));
+                localStorage.setItem('lastWeeklyReset', lastMondayStr);
+                localStorage.removeItem('pendingWorkoutDismissed');
+            }
+        }
+
+        // Verifica se há treino com exercícios marcados mas não concluído no dia anterior
+        function checkPendingWorkout() {
+            const last = lastTrainingDay();
+            if (!last) return;
+
+            // Se já foi dispensado hoje, não mostra de novo
+            const dismissed = localStorage.getItem('pendingWorkoutDismissed');
+            if (dismissed === todayStr()) return;
+
+            // Verifica se o dia anterior já foi registrado no histórico
+            const alreadySaved = workoutHistory.some(h => h.date === last.dateStr && h.dayTitle === workoutData[last.key]?.title);
+            if (alreadySaved) return;
+
+            // Verifica se tinha algum exercício marcado naquele dia
+            const dayItems = workoutData[last.key]?.sections.flatMap(s => s.items) || [];
+            const hadProgress = dayItems.some(item => completedCheckboxes[item.id]);
+            if (!hadProgress) return;
+
+            // Mostra o modal de lembrete
+            document.getElementById('pending-day-name').innerText = workoutData[last.key].title.split(':')[0].trim();
+            document.getElementById('pending-workout-modal').classList.remove('hidden');
+
+            // Seleciona o dia pendente para o modal de finalizar já abrir no dia certo
+            selectedDayKey = last.key;
+        }
+
+        function dismissPendingModal() {
+            document.getElementById('pending-workout-modal').classList.add('hidden');
+            localStorage.setItem('pendingWorkoutDismissed', todayStr());
+            // Volta para o dia de hoje
+            const today = todayDayKey() || 'segunda';
+            selectDay(today);
+        }
+
+        function openFinishModalFromPending() {
+            document.getElementById('pending-workout-modal').classList.add('hidden');
+            openFinishModal();
+        }
+
+        // Toast de feedback
+        function showToast(msg = 'Treino salvo!') {
+            const toast = document.getElementById('success-toast');
+            document.getElementById('toast-msg').innerText = msg;
+            toast.classList.remove('hidden');
+            setTimeout(() => toast.classList.add('hidden'), 3000);
+        }
+
         // HIIT Timer Variables
         let hiitInterval = null;
         let hiitSecondsLeft = 30;
@@ -928,9 +1051,18 @@
             workoutHistory.unshift(entry);
             localStorage.setItem('workoutHistoryLog', JSON.stringify(workoutHistory));
 
+            // Limpa checkboxes do dia concluído
+            const dayItems = data.sections.flatMap(s => s.items);
+            dayItems.forEach(item => delete completedCheckboxes[item.id]);
+            localStorage.setItem('completedCheckboxes', JSON.stringify(completedCheckboxes));
+
+            // Marca como dispensado para não pedir de novo hoje
+            localStorage.setItem('pendingWorkoutDismissed', todayStr());
+
             closeFinishModal();
+            renderWorkoutDay();
             calculateStreak();
-            alert('Treino registrado com sucesso no histórico!');
+            showToast('🏆 Treino registrado no histórico!');
         }
 
         function calculateStreak() {
@@ -1204,8 +1336,18 @@
         // Init
         window.addEventListener('DOMContentLoaded', () => {
             setThemeMode(currentTheme);
-            selectDay('segunda');
+
+            // Reset semanal automático (toda segunda-feira)
+            checkWeeklyReset();
+
+            // Seleciona o dia de treino de hoje automaticamente, ou segunda como fallback
+            const todayKey = todayDayKey() || 'segunda';
+            selectDay(todayKey);
+
             calculateStreak();
+
+            // Verifica se há treino pendente do dia anterior (com delay para UI carregar)
+            setTimeout(checkPendingWorkout, 600);
         });
     </script>
 </body>
